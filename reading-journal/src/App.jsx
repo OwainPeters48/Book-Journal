@@ -55,19 +55,31 @@ function makeGBCoverUrls(item) {
 }
 
 async function searchBooks(query) {
+  // Primary: Google Books with API key — best relevance + descriptions + covers
   try {
     const key = GB_KEY ? `&key=${GB_KEY}` : ''
-    const url = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(query)}&maxResults=10&printType=books${key}`
+    const url = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(query)}&maxResults=12&printType=books&orderBy=relevance${key}`
     const res = await fetch(url)
     if (!res.ok) throw new Error()
     const data = await res.json()
-    if (!data.items?.length) return []
+    if (!data.items?.length) throw new Error('empty')
     return data.items.map(item => {
       const info = item.volumeInfo || {}
       const ids = info.industryIdentifiers || []
       const isbn13 = (ids.find(x => x.type === 'ISBN_13') || {}).identifier || ''
       const isbn10 = (ids.find(x => x.type === 'ISBN_10') || {}).identifier || ''
-      const coverUrls = makeGBCoverUrls(item)
+      const urls = []
+      // Google Books cover first (best quality with API key)
+      if (info.imageLinks) {
+        const base = (info.imageLinks.thumbnail || info.imageLinks.smallThumbnail || '')
+          .replace('http://', 'https://')
+          .replace(/zoom=\d/, 'zoom=2')
+          .replace('&edge=curl', '')
+        if (base) urls.push(base)
+      }
+      // Open Library as cover fallback
+      if (isbn13) urls.push(`https://covers.openlibrary.org/b/isbn/${isbn13}-L.jpg`)
+      if (isbn10) urls.push(`https://covers.openlibrary.org/b/isbn/${isbn10}-L.jpg`)
       return {
         title: info.title || '',
         author: (info.authors || [])[0] || 'Unknown',
@@ -76,12 +88,45 @@ async function searchBooks(query) {
         translator: null,
         description: info.description ? info.description.slice(0, 140) + '…' : '',
         isbn13, isbn10,
-        coverUrl: coverUrls[0] || null,
-        _coverUrls: coverUrls,
+        coverUrl: urls[0] || null,
+        _coverUrls: urls,
       }
     })
-  } catch { return [] }
+  } catch {
+    // Fallback: Open Library search
+    try {
+      const url = `https://openlibrary.org/search.json?q=${encodeURIComponent(query)}&limit=12&fields=key,title,author_name,first_publish_year,publisher,isbn,cover_i`
+      const res = await fetch(url)
+      if (!res.ok) throw new Error()
+      const data = await res.json()
+      const docs = (data.docs || []).filter(d => d.title && d.author_name?.length)
+      if (!docs.length) return []
+      return docs.slice(0, 10).map(doc => {
+        const isbn13 = (doc.isbn || []).find(i => i.length === 13) || ''
+        const isbn10 = (doc.isbn || []).find(i => i.length === 10) || ''
+        const urls = []
+        if (doc.cover_i) {
+          urls.push(`https://covers.openlibrary.org/b/id/${doc.cover_i}-L.jpg`)
+          urls.push(`https://covers.openlibrary.org/b/id/${doc.cover_i}-M.jpg`)
+        }
+        if (isbn13) urls.push(`https://covers.openlibrary.org/b/isbn/${isbn13}-L.jpg`)
+        if (isbn10) urls.push(`https://covers.openlibrary.org/b/isbn/${isbn10}-L.jpg`)
+        return {
+          title: doc.title || '',
+          author: (doc.author_name || [])[0] || 'Unknown',
+          year: doc.first_publish_year ? String(doc.first_publish_year) : '',
+          publisher: (doc.publisher || [])[0] || '',
+          translator: null,
+          description: '',
+          isbn13, isbn10,
+          coverUrl: urls[0] || null,
+          _coverUrls: urls,
+        }
+      })
+    } catch { return [] }
+  }
 }
+
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function Orn() { return <span style={{ color: C.gold, userSelect: 'none' }}>✦</span> }
@@ -121,8 +166,8 @@ function GridCover({ book }) {
   function next() { setI(p => p < urls.length - 1 ? p + 1 : urls.length) }
   function onLoad(e) { if (e.target.naturalWidth <= 1) next() }
   if (src && i < urls.length)
-    return <img src={src} alt="" style={{ width: '100%', height: 158, objectFit: 'cover', display: 'block' }} onError={next} onLoad={onLoad} />
-  return <div style={{ height: 158, background: 'linear-gradient(135deg,#ede5d0,#f5f0e8)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '2.8em', opacity: .3 }}>📖</div>
+    return <img src={src} alt="" style={{ width: '100%', height: 210, objectFit: "cover", display: 'block' }} onError={next} onLoad={onLoad} />
+  return <div style={{ height: 210, background: 'linear-gradient(135deg,#ede5d0,#f5f0e8)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '2.8em', opacity: .3 }}>📖</div>
 }
 
 // ── Modals ────────────────────────────────────────────────────────────────────
@@ -199,7 +244,7 @@ function AddBookModal({ onClose, onAdd }) {
 
   return (
     <div className="modal-bg" onClick={onClose}>
-      <div onClick={e => e.stopPropagation()} className="fade" style={{ background: C.paper, borderRadius: 14, padding: '24px 22px', width: 540, maxWidth: '98vw', maxHeight: '90vh', display: 'flex', flexDirection: 'column', boxShadow: '0 24px 64px rgba(44,36,22,.32)', border: '1px solid #ede5d0' }}>
+      <div onClick={e => e.stopPropagation()} className="fade" style={{ background: C.paper, borderRadius: 14, padding: '24px 22px', width: 540, maxWidth: '98vw', height: '82vh', maxHeight: 660, display: 'flex', flexDirection: 'column', boxShadow: '0 24px 64px rgba(44,36,22,.32)', border: '1px solid #ede5d0' }}>
         <h2 style={{ fontFamily: "'Playfair Display',serif", fontSize: '1.4em', marginBottom: 4 }}>Add a Book</h2>
         <p style={{ color: C.inkLight, fontSize: '.87em', marginBottom: 14 }}>Search by title or author name.</p>
 
